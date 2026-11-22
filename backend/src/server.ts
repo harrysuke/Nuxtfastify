@@ -1,3 +1,5 @@
+import {mkdirSync} from 'node:fs';
+import {dirname} from 'node:path';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
@@ -15,15 +17,24 @@ declare module 'fastify' {
 }
 
 const fastify = Fastify({logger: true});
+// Comma-separated list so one API can serve both frontends (Nuxt and React).
+const corsOrigins = (process.env.CORS_ORIGIN ?? 'http://localhost:3000,http://localhost:5173')
+	.split(',')
+	.map((origin) => origin.trim())
+	.filter(Boolean);
 await fastify.register(cors, {
-	origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+	origin: corsOrigins,
 	credentials: true,
 	methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 	allowedHeaders: ['Content-Type'],
 });
 await fastify.register(cookie);
 
-const sqlite = new Database('task.db');
+fastify.get('/health', async () => ({status: 'ok'}));
+
+const dbPath = process.env.DB_PATH ?? 'task.db';
+mkdirSync(dirname(dbPath), {recursive: true});
+const sqlite = new Database(dbPath);
 const db = drizzle(sqlite);
 
 sqlite.exec(`
@@ -288,8 +299,9 @@ fastify.delete<{Params: {id: string}}>('/notes/:id', async (req, reply) => {
 
 
 //Start Server
+const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 3001);
-fastify.listen({port}, (err) => {
+fastify.listen({host, port}, (err) => {
 	if (err) {
 		fastify.log.error(err);
 		process.exit(1);

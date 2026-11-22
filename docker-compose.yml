@@ -1,0 +1,67 @@
+name: nuxtfastify
+
+services:
+  backend:
+    build:
+      context: ./backend
+    image: ghcr.io/${IMAGE_OWNER:-harrysuke}/nuxtfastify-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3001"
+      DB_PATH: /data/task.db
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000,http://localhost:5173}
+    volumes:
+      - backend-data:/data
+    ports:
+      - "${BACKEND_PORT:-3001}:3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        API_BASE: http://backend:3001
+    image: ghcr.io/${IMAGE_OWNER:-harrysuke}/nuxtfastify-frontend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      NUXT_API_BASE: http://backend:3001
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  react:
+    build:
+      context: ./react
+    image: ghcr.io/${IMAGE_OWNER:-harrysuke}/nuxtfastify-react:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      API_BASE: http://backend:3001
+    ports:
+      - "${REACT_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  backend-data:

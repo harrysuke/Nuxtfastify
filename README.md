@@ -38,6 +38,26 @@ npm run dev
 
 Open <http://localhost:3000> and register an account. The first registered user inherits any pre-authentication task/note rows that had no owner.
 
+## Docker Compose (all services)
+
+Multi-stage Dockerfiles build the API, the Nuxt server, and the React static client; Compose wires them together on one network.
+
+```bash
+cd Nuxt
+cp .env.example .env          # optional: override host ports / CORS origins
+docker compose up -d --build  # or: npm run docker:up
+```
+
+| Service | URL | Notes |
+| --- | --- | --- |
+| Nuxt frontend | <http://localhost:3000> | Server-side `/api` proxy forwards to `backend:3001` |
+| Fastify API | <http://localhost:3001/health> | SQLite file lives in the `backend-data` named volume |
+| React client | <http://localhost:5173> | nginx serves the build and proxies `/api` to `backend:3001` |
+
+Useful commands: `docker compose logs -f`, `docker compose ps`, `docker compose down` (add `-v` to discard the database volume), and `npm run docker:down`.
+
+The API container listens on `0.0.0.0`, stores its database at `/data/task.db`, and allows both frontend origins via `CORS_ORIGIN`. The Node containers run as the unprivileged `node` user and nginx under its own unprivileged user; health checks gate startup of both frontends. `NODE_ENV` is deliberately not set to `production` in Compose because the session cookie would then require HTTPS.
+
 ## Alternative React frontend
 
 Keep the backend running (`npm run dev` from the root starts both backend and Nuxt, or run `npm install --prefix backend && npm run dev --prefix backend` for the API only), then:
@@ -54,8 +74,10 @@ Open <http://localhost:5173>. The Vite dev/preview server proxies `/api` to `htt
 | Location | Command | Description |
 | --- | --- | --- |
 | root | `npm run dev` | Run backend and Nuxt together via `concurrently` |
+| root | `npm run docker:up` / `docker:down` | Start / stop all three containers |
 | `backend/` | `npm run dev` | API with `tsx watch` |
-| `backend/` | `npx tsc --noEmit` | Type-check the API |
+| `backend/` | `npm run typecheck` (`tsc --noEmit`) | Type-check the API |
+| `backend/` | `npm run build` / `start` | Compile to `dist/` and run the compiled server |
 | `frontend/` | `npm run dev` / `build` / `preview` / `generate` | Nuxt development, production build, preview, static generation |
 | `react/` | `npm run dev` / `build` / `preview` / `lint` | Vite development, build, preview, ESLint |
 
@@ -66,11 +88,14 @@ All settings are optional and have local-development defaults.
 | Variable | Used by | Default | Purpose |
 | --- | --- | --- | --- |
 | `PORT` | backend | `3001` | API listen port |
-| `CORS_ORIGIN` | backend | `http://localhost:3000` | Allowed origin for credentialed requests |
+| `HOST` | backend | `127.0.0.1` | Listen address; Compose sets `0.0.0.0` so the container is reachable |
+| `DB_PATH` | backend | `task.db` | SQLite file path (Compose uses `/data/task.db` on a named volume) |
+| `CORS_ORIGIN` | backend | `http://localhost:3000,http://localhost:5173` | Comma-separated origins allowed to make credentialed requests |
 | `NODE_ENV` | backend | unset | `production` makes the session cookie `Secure` (HTTPS required) |
-| `API_BASE` | Nuxt | `http://localhost:3001` | Backend target of the Nuxt `/api` proxy |
+| `API_BASE` | Nuxt | `http://localhost:3001` | Backend target of the Nuxt `/api` proxy (baked into the build) |
+| `NUXT_API_BASE` | Nuxt | unset | Runtime override of the Nuxt `/api` proxy target (used by Compose) |
 
-The React proxy target is defined in `react/vite.config.ts`; change it there if the backend runs on a different port.
+The React dev/preview proxy target is defined in `react/vite.config.ts`; in Docker, nginx proxies `/api` using `API_BASE` (`http://backend:3001` by default).
 
 ## Database
 
@@ -114,6 +139,15 @@ curl -b cookies.txt http://localhost:3001/tasks
 ```
 
 Browser clients normally call these paths under `/api` (for example `/api/tasks`) and let the Nuxt/Vite proxy forward them to port 3001.
+
+## CI/CD (GitHub Actions)
+
+- `.github/workflows/ci.yml` runs on pull requests, pushes to `main`, and manual dispatch: backend typecheck + compile, Nuxt build, React lint + build, plus a no-push Docker build of each image.
+- `.github/workflows/cd.yml` runs on pushes to `main` and manual dispatch: it publishes `ghcr.io/<owner>/taskflow-backend`, `.../taskflow-frontend`, and `.../taskflow-react`, tagged `latest` and `sha-<commit>`. The built-in `GITHUB_TOKEN` with `packages: write` is the only credential needed.
+
+To deploy manually, put `docker-compose.yml` and a `.env` (with `IMAGE_OWNER` set to the GitHub owner) on the server, then run `docker compose pull && docker compose up -d`. If the GHCR packages are private, authenticate the server first with `docker login ghcr.io` using a token that has `read:packages`.
+
+The `deploy` job is optional and skipped by default. Enable it with repository variable `DEPLOY_ENABLED=true` plus `DEPLOY_PATH`, and secrets `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` (optionally `DEPLOY_PORT`). It pulls and starts the exact `sha-<commit>` images produced by that run.
 
 ## Deployment notes
 
